@@ -1,0 +1,11 @@
+# Backup outputs
+backups/
+*.tar
+*.tar.gz
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Local runtime files
+.DS_Store

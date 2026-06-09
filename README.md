@@ -1,0 +1,134 @@
+# Docker Backup Helper
+
+一个零依赖的交互式 Docker 备份工具，适合同时存在 `docker run` 容器和 `docker compose` 容器的机器。
+
+它备份的是恢复真正需要的信息：
+
+- 容器 `docker inspect` 元数据
+- `docker run` 容器的最佳努力启动命令
+- compose 容器的 compose 文件和 `.env`，前提是 Docker labels 能定位到这些文件
+- 命名 Docker volume
+- bind mount 的宿主机目录
+- 可选的镜像 `docker save` 归档
+
+工具优先保证数据一致性：交互模式下选中 running 容器时，默认建议先停止容器，备份完成后再启动回来。无恢复价值的运行时 bind mount 会默认跳过，例如 `/run`、`/proc`、`/sys`、`/dev`、`/tmp` 和 socket/FIFO/device 文件。
+
+## 使用
+
+列出当前容器和挂载：
+
+```bash
+python3 scripts/docker-backup.py list
+```
+
+交互式备份：
+
+```bash
+python3 scripts/docker-backup.py backup
+```
+
+指定输出目录：
+
+```bash
+python3 scripts/docker-backup.py backup -o /path/to/backups
+```
+
+非交互式备份全部容器、volume 和 bind mount：
+
+```bash
+python3 scripts/docker-backup.py backup \
+  --non-interactive \
+  --containers all \
+  --include-volumes \
+  --include-binds
+```
+
+如果还想备份镜像：
+
+```bash
+python3 scripts/docker-backup.py backup \
+  --non-interactive \
+  --containers all \
+  --include-volumes \
+  --include-binds \
+  --include-images
+```
+
+备份前停止正在运行的容器，备份结束后自动启动回来：
+
+```bash
+python3 scripts/docker-backup.py backup \
+  --containers all \
+  --include-volumes \
+  --include-binds \
+  --stop always
+```
+
+如果选中的容器和其他 running 容器共享同一个 volume 或 bind mount，工具会提示共享关系；使用 `--stop always` 时，会把这些共享挂载的 running 容器也一起停止并在备份后启动回来。
+
+停止容器时默认等待 30 秒，可以调整：
+
+```bash
+python3 scripts/docker-backup.py backup --stop always --stop-timeout 60
+```
+
+## 备份产物
+
+默认会生成：
+
+```text
+backups/docker-backup-YYYYmmdd-HHMMSS/
+  manifest.json
+  inspect/
+  compose/
+  volumes/
+  binds/
+  images/
+```
+
+`manifest.json` 是恢复索引，里面包含容器、挂载、compose 文件、镜像归档，以及普通容器的 `docker run` 启动命令。
+
+如果备份时选择了停止容器，`manifest.json` 也会记录本次被停止过的容器名称、共享挂载关系、被跳过的 bind mount，以及单项备份失败记录。
+
+如果备份过程中发生整体异常，工具会写出 `manifest.partial.json`，方便判断哪些步骤已经完成。
+
+## 恢复思路
+
+compose 容器：
+
+1. 先恢复 `volumes/` 和 `binds/` 中的数据。
+2. 进入 `compose/` 下对应容器目录，检查复制出来的 compose 文件和 `.env`。
+3. 使用 `docker compose up -d` 重建服务。
+
+compose 文件会按项目放在 `compose/<project>/` 下，而不是按容器拆散。
+
+`docker run` 容器：
+
+1. 先恢复命名 volume 和 bind mount 目录。
+2. 如果备份了镜像，执行 `docker load -i images/xxx.tar`。
+3. 参考 `manifest.json` 里的 `run_command` 重建容器。
+
+命名 volume 的恢复示例：
+
+```bash
+docker volume create my_volume
+docker run --rm \
+  -v my_volume:/data \
+  -v "$PWD/backups/docker-backup-YYYYmmdd-HHMMSS/volumes:/backup" \
+  alpine \
+  tar -xzf /backup/my_volume.tar.gz -C /data
+```
+
+bind mount 的恢复示例：
+
+```bash
+tar -xzf backups/docker-backup-YYYYmmdd-HHMMSS/binds/path__to__data.tar.gz -C /restore/parent
+```
+
+## 注意事项
+
+- 数据库类容器最好使用 `--stop always`，或者使用数据库自身的 dump 工具配合这个工具，避免热备文件不一致。
+- `--stop always` 会停止本次选中且原本处于 running 状态的容器；如果其他 running 容器共享同一个挂载，也会一起停止，并在备份结束后尽力启动回来。
+- `docker export` 不适合作为主要备份方式，因为它不会包含 volume 数据，也不能完整保留启动配置。
+- compose 文件依赖 Docker labels 定位；如果原始 compose 文件已经移动或删除，工具仍会保存 `inspect/` 和挂载数据。
+- bind mount 目录可能很大，第一次运行前建议先用 `list` 看清楚会备份哪些路径；运行时路径和特殊文件会默认跳过。
