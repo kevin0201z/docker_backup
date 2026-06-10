@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import json
+import os
 import shlex
 import shutil
+import stat
 import subprocess
+import sys
 import tarfile
 from pathlib import Path
 from typing import Callable, Iterable
@@ -54,7 +57,10 @@ def load_containers() -> list[Container]:
     if not ids:
         return []
 
-    inspected = docker_json(["inspect", *ids])
+    try:
+        inspected = docker_json(["inspect", *ids])
+    except subprocess.CalledProcessError:
+        return []
     containers: list[Container] = []
     for item in inspected:
         labels = item.get("Config", {}).get("Labels") or {}
@@ -266,15 +272,40 @@ def make_tar_from_path(src: Path, out_file: Path) -> None:
 
 
 def safe_extract_tar(archive: Path, destination: Path) -> None:
+    """Extract tar while guarding against path traversal via symlinks.
+
+    On Python 3.12+ we use ``tarfile.extractall(filter='data')`` which
+    provides built-in protection against path traversal attacks.
+
+    On older Python we extract member-by-member and re-validate each time
+    so that a symlink created by a prior member IS followed by
+    ``Path.resolve()`` when checking subsequent members.  Directory
+    attribute-setting is deferred until after all members are extracted
+    (matching ``extractall``'s internal behaviour) to prevent a directory
+    with restrictive permissions from blocking its own contents.
+    """
     destination = destination.resolve()
     with tarfile.open(archive, "r:*") as tar:
-        for member in tar.getmembers():
+        if sys.version_info >= (3, 12):
+            tar.extractall(destination, filter="data")
+            return
+
+        members = tar.getmembers()
+        for member in members:
             target = (destination / member.name).resolve()
             try:
                 target.relative_to(destination)
             except ValueError as exc:
                 raise RuntimeError(f"unsafe tar entry: {member.name}") from exc
-        tar.extractall(destination)
+            tar.extract(member, destination, set_attrs=False)
+        # Defer directory attribute-setting so that restrictive perms
+        # (e.g. chmod 0555) don't block files inside that directory.
+        for member in members:
+            if member.isdir():
+                target_path = (destination / member.name)
+                if target_path.exists():
+                    os.chmod(target_path, stat.S_IMODE(member.mode))
+                    os.utime(target_path, (member.mtime, member.mtime))
 
 
 def backup_named_volume(volume: str, out_file: Path) -> None:

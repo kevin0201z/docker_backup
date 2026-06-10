@@ -10,10 +10,12 @@ import tarfile
 from pathlib import Path
 from typing import Callable
 
+from .checksums import verify_checksums
 from .docker_ops import (
     backup_named_volume,
     clear_volume,
     docker_volume_exists,
+    load_containers,
     make_tar_from_path,
     run,
     safe_extract_tar,
@@ -97,6 +99,24 @@ def restore_bind_archive(target: Path, archive: Path) -> None:
     safe_extract_tar(archive, target.parent)
 
 
+def restore_conflicts(manifest: dict) -> dict[str, list[str]]:
+    conflicts: dict[str, list[str]] = {}
+    containers = load_containers()
+    if not containers:
+        return conflicts
+    volumes = set(manifest.get("volume_archives", {}).keys())
+    binds = set(manifest.get("bind_archives", {}).keys())
+    for container in containers:
+        if container.state != "running":
+            continue
+        for mount in container.mounts:
+            if mount.type == "volume" and mount.name in volumes:
+                conflicts.setdefault(f"volume:{mount.name}", []).append(container.name)
+            if mount.type == "bind" and mount.source in binds:
+                conflicts.setdefault(f"bind:{mount.source}", []).append(container.name)
+    return conflicts
+
+
 def restore_backup(
     backup_dir: Path,
     log: Callable[[str], None] = print,
@@ -105,6 +125,14 @@ def restore_backup(
     restore_binds: bool = True,
 ) -> Path:
     manifest = load_manifest(backup_dir)
+    checksum_result = verify_checksums(backup_dir)
+    if checksum_result["failed"]:
+        raise RuntimeError(f"checksum verification failed: {', '.join(checksum_result['failed'])}")
+    if checksum_result["missing"] == ["checksums.txt"]:
+        log("提示：未找到 checksums.txt，跳过归档校验。")
+    elif checksum_result["missing"]:
+        raise RuntimeError(f"checksum files missing: {', '.join(checksum_result['missing'])}")
+
     timestamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
     safety_root = backup_dir / "restore-safety" / timestamp
     report = {
@@ -115,12 +143,17 @@ def restore_backup(
         "restored_volumes": {},
         "restored_binds": {},
         "failed": {},
+        "conflicts": {},
         "container_commands": [
             c.get("run_command")
             for c in manifest.get("containers", [])
             if c.get("run_command")
         ],
     }
+    conflicts = restore_conflicts(manifest)
+    report["conflicts"] = conflicts
+    for target, containers in conflicts.items():
+        log(f"警告：{target} 正被运行中的容器使用：{', '.join(containers)}")
 
     if restore_images:
         for image, rel_path in manifest.get("image_archives", {}).items():

@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 import argparse
+import datetime as dt
+import shutil
 from pathlib import Path
 
 from .backup import perform_backup
+from .checksums import verify_checksums
 from .docker_ops import consistency_scope, load_containers, require_docker
 from .models import BackupOptions, Container
+from .restore import restore_backup, scan_backup_dirs
 from .tui import tui
+from .utils import ensure_backup_dir
 
 
 def print_inventory(containers: list[Container]) -> None:
@@ -121,6 +126,84 @@ def list_only(_: argparse.Namespace) -> None:
         print("No containers found.")
 
 
+def restore_cmd(args: argparse.Namespace) -> None:
+    require_docker()
+    backup_dir = ensure_backup_dir(Path(args.backup_dir))
+    report = restore_backup(
+        backup_dir,
+        restore_images=not args.no_images,
+        restore_volumes=not args.no_volumes,
+        restore_binds=not args.no_binds,
+    )
+    print(f"Restore report: {report}")
+
+
+def delete_cmd(args: argparse.Namespace) -> None:
+    backup_dir = ensure_backup_dir(Path(args.backup_dir))
+    if not args.yes and not ask_yes_no(f"Delete backup {backup_dir}?", False):
+        print("Canceled.")
+        return
+    shutil.rmtree(backup_dir)
+    print(f"Deleted backup: {backup_dir}")
+
+
+def prune_cmd(args: argparse.Namespace) -> None:
+    root = Path(args.output)
+    backups = scan_backup_dirs(root)
+    cutoff = None
+    if args.days is not None:
+        cutoff = dt.datetime.now() - dt.timedelta(days=args.days)
+
+    to_delete: list[Path] = []
+    if args.keep is not None and len(backups) > args.keep:
+        to_delete.extend(reversed(backups[args.keep:]))
+    if cutoff is not None:
+        for backup_dir in backups:
+            try:
+                stamp = backup_dir.name.removeprefix("docker-backup-")
+                created = dt.datetime.strptime(stamp, "%Y%m%d-%H%M%S")
+            except ValueError:
+                continue
+            if created < cutoff:
+                to_delete.append(backup_dir)
+
+    unique = []
+    seen = set()
+    for backup_dir in to_delete:
+        try:
+            resolved = ensure_backup_dir(backup_dir)
+        except ValueError:
+            continue
+        if resolved not in seen:
+            seen.add(resolved)
+            unique.append(resolved)
+
+    if not unique:
+        print("No backups to delete.")
+        return
+    for backup_dir in unique:
+        print(f"Will delete: {backup_dir}")
+    if not args.yes and not ask_yes_no("Delete listed backups?", False):
+        print("Canceled.")
+        return
+    for backup_dir in unique:
+        shutil.rmtree(backup_dir)
+        print(f"Deleted: {backup_dir}")
+
+
+def check_cmd(args: argparse.Namespace) -> None:
+    backup_dir = ensure_backup_dir(Path(args.backup_dir))
+    result = verify_checksums(backup_dir)
+    print(f"OK: {len(result['ok'])}")
+    print(f"Missing: {len(result['missing'])}")
+    print(f"Failed: {len(result['failed'])}")
+    for key in ["missing", "failed"]:
+        for rel in result[key]:
+            print(f"{key}: {rel}")
+    if result["missing"] or result["failed"]:
+        raise SystemExit(1)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Interactive Docker backup helper")
     subparsers = parser.add_subparsers(dest="command")
@@ -147,6 +230,29 @@ def main() -> int:
     tui_parser = subparsers.add_parser("tui", help="Open the Chinese terminal UI")
     tui_parser.add_argument("-o", "--output", default="./backups", help="Directory where backups are read and written")
     tui_parser.set_defaults(func=tui)
+
+    restore_parser = subparsers.add_parser("restore", help="Restore a backup directory")
+    restore_parser.add_argument("backup_dir", help="Path to docker-backup-* directory")
+    restore_parser.add_argument("--no-images", action="store_true", help="Skip restoring images")
+    restore_parser.add_argument("--no-volumes", action="store_true", help="Skip restoring Docker volumes")
+    restore_parser.add_argument("--no-binds", action="store_true", help="Skip restoring bind mounts")
+    restore_parser.set_defaults(func=restore_cmd)
+
+    delete_parser = subparsers.add_parser("delete", help="Delete one backup directory")
+    delete_parser.add_argument("backup_dir", help="Path to docker-backup-* directory")
+    delete_parser.add_argument("-y", "--yes", action="store_true", help="Delete without prompting")
+    delete_parser.set_defaults(func=delete_cmd)
+
+    prune_parser = subparsers.add_parser("prune", help="Delete old backups by retention policy")
+    prune_parser.add_argument("-o", "--output", default="./backups", help="Directory containing backups")
+    prune_parser.add_argument("--keep", type=int, help="Keep newest N backups")
+    prune_parser.add_argument("--days", type=int, help="Delete backups older than N days")
+    prune_parser.add_argument("-y", "--yes", action="store_true", help="Delete without prompting")
+    prune_parser.set_defaults(func=prune_cmd)
+
+    check_parser = subparsers.add_parser("check", help="Verify backup checksums")
+    check_parser.add_argument("backup_dir", help="Path to docker-backup-* directory")
+    check_parser.set_defaults(func=check_cmd)
 
     args = parser.parse_args()
     if not hasattr(args, "func"):

@@ -14,6 +14,7 @@ from .backup import perform_backup
 from .docker_ops import consistency_scope, load_containers, require_docker
 from .models import BackupOptions, Container
 from .restore import load_manifest, restore_backup, scan_backup_dirs
+from .utils import available_space, database_hints, estimate_bind_size, human_size
 
 
 def source_label(container: Container) -> str:
@@ -303,6 +304,14 @@ class DockerBackupTUI:
             f"数据卷：{'是' if options.include_volumes else '否'}；挂载目录：{'是' if options.include_binds else '否'}；镜像：{'是' if options.include_images else '否'}。",
             f"输出目录：{options.output}",
         ]
+        if options.include_binds:
+            lines.append(f"挂载目录估算大小：{human_size(estimate_bind_size(selected))}")
+            lines.append(f"输出目录可用空间：{human_size(available_space(options.output))}")
+        hints = database_hints(selected)
+        if hints:
+            lines.append("")
+            lines.append("数据库容器提示：")
+            lines.extend(f"- {name}: {hint}" for name, hint in hints.items())
         if options.stop_policy == "always" and running:
             lines.append("将先停止这些运行中的容器，备份完成后自动启动：" + ", ".join(running))
         if not self.confirm("确认备份", lines, default=True):
@@ -311,12 +320,15 @@ class DockerBackupTUI:
         try:
             backup_dir = perform_backup(selected, containers, options, self.log)
             self.message("备份完成", [f"备份已完成：{backup_dir}", f"索引文件：{backup_dir / 'manifest.json'}"])
-        except Exception as exc:
-            self.message("备份失败", [f"备份过程中发生错误：{exc}", "如果已生成 manifest.partial.json，可用于查看已完成步骤。"])
+        except (Exception, KeyboardInterrupt) as exc:
+            if isinstance(exc, KeyboardInterrupt):
+                self.message("备份已取消", ["用户中断了备份操作，已写入部分进度。"])
+            else:
+                self.message("备份失败", [f"备份过程中发生错误：{exc}", "如果已生成 manifest.partial.json，可用于查看已完成步骤。"])
 
     def backup_summary_lines(self, backup_dir: Path, manifest: dict) -> list[str]:
         containers = manifest.get("containers", [])
-        return [
+        lines = [
             f"备份目录：{backup_dir}",
             f"备份时间：{format_backup_time(manifest.get('created_at'))}",
             f"容器数量：{len(containers)}",
@@ -326,6 +338,12 @@ class DockerBackupTUI:
             f"跳过挂载：{len(manifest.get('skipped_binds', {}))}",
             f"失败项：{len(manifest.get('failed_binds', {})) + len(manifest.get('failed_volumes', {}))}",
         ]
+        if (backup_dir / "checksums.txt").is_file():
+            lines.append("校验文件：checksums.txt")
+        if manifest.get("database_hints"):
+            lines.append("数据库提示：")
+            lines.extend(f"- {name}: {hint}" for name, hint in manifest["database_hints"].items())
+        return lines
 
     def choose_backup(self, title: str, *, oldest_first: bool = False) -> tuple[Path, dict] | None:
         backups = scan_backup_dirs(self.backup_root)

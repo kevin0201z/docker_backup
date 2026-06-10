@@ -33,6 +33,31 @@ python3 scripts/docker-backup.py backup
 python3 scripts/docker-backup.py tui
 ```
 
+校验备份归档：
+
+```bash
+python3 scripts/docker-backup.py check backups/docker-backup-YYYYmmdd-HHMMSS
+```
+
+命令行还原备份：
+
+```bash
+python3 scripts/docker-backup.py restore backups/docker-backup-YYYYmmdd-HHMMSS
+```
+
+命令行删除单个备份：
+
+```bash
+python3 scripts/docker-backup.py delete backups/docker-backup-YYYYmmdd-HHMMSS
+```
+
+按保留策略清理旧备份：
+
+```bash
+python3 scripts/docker-backup.py prune --keep 5
+python3 scripts/docker-backup.py prune --days 30
+```
+
 TUI 主菜单包含：
 
 - `备份容器`
@@ -105,6 +130,7 @@ backups/docker-backup-YYYYmmdd-HHMMSS/
   volumes/
   binds/
   images/
+  checksums.txt
 ```
 
 `manifest.json` 是恢复索引，里面包含容器、挂载、compose 文件、镜像归档，以及普通容器的 `docker run` 启动命令。
@@ -112,6 +138,10 @@ backups/docker-backup-YYYYmmdd-HHMMSS/
 如果备份时选择了停止容器，`manifest.json` 也会记录本次被停止过的容器名称、共享挂载关系、被跳过的 bind mount，以及单项备份失败记录。
 
 如果备份过程中发生整体异常，工具会写出 `manifest.partial.json`，方便判断哪些步骤已经完成。
+
+备份完成后会生成 `checksums.txt`，记录 manifest、inspect、compose、volume、bind、image 归档的 SHA256。还原前如果存在该文件，工具会先校验归档；校验失败会停止还原。
+
+如果检测到 PostgreSQL、MySQL、Redis、MongoDB、Oracle 等常见数据库镜像，确认页和 manifest 会提示建议搭配数据库自身的逻辑备份工具。
 
 ## TUI 还原
 
@@ -136,6 +166,8 @@ backups/docker-backup-YYYYmmdd-HHMMSS/restore-report.json
 ```
 
 同名容器不会自动停止、删除或替换。还原完成后，TUI 会展示 `manifest.json` 中记录的 `docker run` 命令或 compose 恢复提示，供你确认后手动执行。
+
+还原前会检查目标 volume 或 bind mount 是否被运行中的容器使用；如果发现冲突，会写入日志和 `restore-report.json`。
 
 ## TUI 删除备份
 

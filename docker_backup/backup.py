@@ -9,6 +9,7 @@ import tarfile
 from pathlib import Path
 from typing import Callable
 
+from .checksums import write_checksums
 from .docker_ops import (
     bind_skip_reason,
     compose_files,
@@ -22,6 +23,7 @@ from .docker_ops import (
     stop_running_containers,
 )
 from .models import BackupOptions, BackupReport, COMPOSE_WORKDIR, Container
+from .utils import database_hints
 
 
 def compose_group_name(container: Container) -> str:
@@ -63,6 +65,7 @@ def _build_manifest_dict(
         "skipped_binds": report.skipped_binds,
         "failed_binds": report.failed_binds,
         "failed_volumes": report.failed_volumes,
+        "database_hints": database_hints(selected),
         "restore_notes": [
             "For compose containers, restore bind/volume data first, then run docker compose up -d from the copied compose directory.",
             "For docker-run containers, restore named volumes/bind paths first, load saved images if needed, then use the stored run_command as a starting point.",
@@ -183,11 +186,15 @@ def perform_backup(
                     log(f"备份挂载目录 {mount.source} 失败：{exc}")
 
         write_manifest(backup_dir, selected, volume_files, bind_files, image_files, copied_compose_files, stopped_containers, report)
-    except KeyboardInterrupt:
-        log("备份被用户中断。")
-        raise
-    except Exception as exc:
-        write_partial_manifest(backup_dir, selected, volume_files, bind_files, image_files, copied_compose_files, stopped_containers, report, exc)
+        checksum_path = write_checksums(backup_dir)
+        log(f"校验和已写入：{checksum_path}")
+    except BaseException as exc:
+        human_error = Exception("user interrupted") if isinstance(exc, KeyboardInterrupt) else exc
+        if isinstance(exc, KeyboardInterrupt):
+            log("备份被用户中断。")
+        write_partial_manifest(backup_dir, selected, volume_files, bind_files, image_files, copied_compose_files, stopped_containers, report, human_error)
+        if isinstance(exc, KeyboardInterrupt):
+            log("已写入部分进度到 manifest.partial.json。")
         raise
     finally:
         if stopped_containers:
