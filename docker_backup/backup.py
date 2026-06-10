@@ -140,9 +140,11 @@ def perform_backup(
                     copied_compose_groups.add(group)
                     container_compose_dir = backup_dir / "compose" / group
                     container_compose_dir.mkdir(exist_ok=True)
+                    workdir = c.labels.get(COMPOSE_WORKDIR)
+                    base_dir = Path(workdir) if workdir else None
                     copied: list[str] = []
                     for file_path in compose_files(c):
-                        copied_file = copy_if_exists(file_path, container_compose_dir)
+                        copied_file = copy_if_exists(file_path, container_compose_dir, base_dir)
                         if copied_file:
                             copied.append(str(copied_file.relative_to(backup_dir)))
                     copied_compose_files[group] = copied

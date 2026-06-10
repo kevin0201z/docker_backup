@@ -45,6 +45,12 @@ python3 scripts/docker-backup.py check backups/docker-backup-YYYYmmdd-HHMMSS
 python3 scripts/docker-backup.py restore backups/docker-backup-YYYYmmdd-HHMMSS
 ```
 
+如果目标 volume 或 bind mount 正被 running 容器使用，还原会默认中止。确认要覆盖时可以显式加 `--force`：
+
+```bash
+python3 scripts/docker-backup.py restore backups/docker-backup-YYYYmmdd-HHMMSS --force
+```
+
 命令行删除单个备份：
 
 ```bash
@@ -57,6 +63,8 @@ python3 scripts/docker-backup.py delete backups/docker-backup-YYYYmmdd-HHMMSS
 python3 scripts/docker-backup.py prune --keep 5
 python3 scripts/docker-backup.py prune --days 30
 ```
+
+`--keep` 和 `--days` 必须是大于等于 1 的整数。
 
 TUI 主菜单包含：
 
@@ -167,7 +175,7 @@ backups/docker-backup-YYYYmmdd-HHMMSS/restore-report.json
 
 同名容器不会自动停止、删除或替换。还原完成后，TUI 会展示 `manifest.json` 中记录的 `docker run` 命令或 compose 恢复提示，供你确认后手动执行。
 
-还原前会检查目标 volume 或 bind mount 是否被运行中的容器使用；如果发现冲突，会写入日志和 `restore-report.json`。
+还原前会检查目标 volume 或 bind mount 是否被运行中的容器使用；如果发现冲突，会写入日志和 `restore-report.json` 并默认中止。命令行只有在传入 `--force` 时才会继续覆盖，TUI 会展示冲突并要求先处理运行中的容器。
 
 ## TUI 删除备份
 

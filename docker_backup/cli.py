@@ -63,6 +63,16 @@ def ask_yes_no(prompt: str, default: bool) -> bool:
     return answer in {"y", "yes"}
 
 
+def positive_int(text: str) -> int:
+    try:
+        value = int(text)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"invalid integer value: {text}") from exc
+    if value < 1:
+        raise argparse.ArgumentTypeError("value must be 1 or greater")
+    return value
+
+
 def decide_stop_policy(args: argparse.Namespace, stop_scope: list[Container], shared_mounts: dict[str, list[str]]) -> str:
     running = [c for c in stop_scope if c.state == "running"]
     if not running or args.stop == "never":
@@ -134,6 +144,7 @@ def restore_cmd(args: argparse.Namespace) -> None:
         restore_images=not args.no_images,
         restore_volumes=not args.no_volumes,
         restore_binds=not args.no_binds,
+        force_conflicts=args.force,
     )
     print(f"Restore report: {report}")
 
@@ -236,6 +247,11 @@ def main() -> int:
     restore_parser.add_argument("--no-images", action="store_true", help="Skip restoring images")
     restore_parser.add_argument("--no-volumes", action="store_true", help="Skip restoring Docker volumes")
     restore_parser.add_argument("--no-binds", action="store_true", help="Skip restoring bind mounts")
+    restore_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Restore even when running containers use target volumes or binds",
+    )
     restore_parser.set_defaults(func=restore_cmd)
 
     delete_parser = subparsers.add_parser("delete", help="Delete one backup directory")
@@ -245,8 +261,8 @@ def main() -> int:
 
     prune_parser = subparsers.add_parser("prune", help="Delete old backups by retention policy")
     prune_parser.add_argument("-o", "--output", default="./backups", help="Directory containing backups")
-    prune_parser.add_argument("--keep", type=int, help="Keep newest N backups")
-    prune_parser.add_argument("--days", type=int, help="Delete backups older than N days")
+    prune_parser.add_argument("--keep", type=positive_int, help="Keep newest N backups")
+    prune_parser.add_argument("--days", type=positive_int, help="Delete backups older than N days")
     prune_parser.add_argument("-y", "--yes", action="store_true", help="Delete without prompting")
     prune_parser.set_defaults(func=prune_cmd)
 

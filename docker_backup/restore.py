@@ -99,13 +99,20 @@ def restore_bind_archive(target: Path, archive: Path) -> None:
     safe_extract_tar(archive, target.parent)
 
 
-def restore_conflicts(manifest: dict) -> dict[str, list[str]]:
+def restore_conflicts(
+    manifest: dict,
+    *,
+    include_volumes: bool = True,
+    include_binds: bool = True,
+) -> dict[str, list[str]]:
     conflicts: dict[str, list[str]] = {}
+    if not include_volumes and not include_binds:
+        return conflicts
     containers = load_containers()
     if not containers:
         return conflicts
-    volumes = set(manifest.get("volume_archives", {}).keys())
-    binds = set(manifest.get("bind_archives", {}).keys())
+    volumes = set(manifest.get("volume_archives", {}).keys()) if include_volumes else set()
+    binds = set(manifest.get("bind_archives", {}).keys()) if include_binds else set()
     for container in containers:
         if container.state != "running":
             continue
@@ -117,12 +124,20 @@ def restore_conflicts(manifest: dict) -> dict[str, list[str]]:
     return conflicts
 
 
+def write_restore_report(backup_dir: Path, report: dict, log: Callable[[str], None]) -> Path:
+    report_path = backup_dir / "restore-report.json"
+    report_path.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
+    log(f"还原报告已写入：{report_path}")
+    return report_path
+
+
 def restore_backup(
     backup_dir: Path,
     log: Callable[[str], None] = print,
     restore_images: bool = True,
     restore_volumes: bool = True,
     restore_binds: bool = True,
+    force_conflicts: bool = False,
 ) -> Path:
     manifest = load_manifest(backup_dir)
     checksum_result = verify_checksums(backup_dir)
@@ -150,10 +165,15 @@ def restore_backup(
             if c.get("run_command")
         ],
     }
-    conflicts = restore_conflicts(manifest)
+    conflicts = restore_conflicts(manifest, include_volumes=restore_volumes, include_binds=restore_binds)
     report["conflicts"] = conflicts
     for target, containers in conflicts.items():
         log(f"警告：{target} 正被运行中的容器使用：{', '.join(containers)}")
+    if conflicts and not force_conflicts:
+        report["failed"]["conflicts"] = "restore targets are used by running containers"
+        write_restore_report(backup_dir, report, log)
+        targets = ", ".join(sorted(conflicts))
+        raise RuntimeError(f"restore targets are used by running containers: {targets}")
 
     if restore_images:
         for image, rel_path in manifest.get("image_archives", {}).items():
@@ -195,7 +215,4 @@ def restore_backup(
                 report["failed"][f"bind:{bind_path}"] = str(exc)
                 log(f"恢复挂载目录失败：{bind_path}：{exc}")
 
-    report_path = backup_dir / "restore-report.json"
-    report_path.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
-    log(f"还原报告已写入：{report_path}")
-    return report_path
+    return write_restore_report(backup_dir, report, log)

@@ -4,10 +4,11 @@
 
 This repository contains a zero-dependency Docker backup helper.
 
-- `scripts/docker-backup.py` is the main executable Python script. It contains CLI parsing, Docker inspection, backup creation, manifest writing, and restore metadata generation.
+- `scripts/docker-backup.py` is the lightweight executable entrypoint. The implementation lives in the `docker_backup/` package.
+- `docker_backup/cli.py` contains argparse command wiring. `docker_backup/docker_ops.py`, `backup.py`, `restore.py`, `checksums.py`, `tui.py`, `utils.py`, and `models.py` split Docker access, archive handling, restore flow, checksum logic, terminal UI, helpers, and shared data types.
+- `tests/` contains the committed standard-library `unittest` regression suite.
 - `README.md` documents user-facing behavior, backup contents, restore flow, and common command examples.
 - Runtime backup output is written to `backups/docker-backup-YYYYmmdd-HHMMSS/` by default. Treat this as generated data and do not commit it.
-- There is currently no dedicated test directory or packaged Python module layout.
 
 ## Build, Test, and Development Commands
 
@@ -15,7 +16,8 @@ This repository contains a zero-dependency Docker backup helper.
 - `python3 scripts/docker-backup.py list` lists Docker containers and detected mounts. Requires access to a running Docker daemon.
 - `python3 scripts/docker-backup.py backup` starts an interactive backup.
 - `python3 scripts/docker-backup.py backup --non-interactive --containers all --include-volumes --include-binds` runs a full data backup without prompts.
-- `python3 -m py_compile scripts/docker-backup.py` performs a quick syntax check without requiring Docker.
+- `python3 -m py_compile scripts/docker-backup.py docker_backup/*.py` performs a quick syntax check without requiring Docker.
+- `python3 -m unittest -v` runs the regression suite.
 
 ## Coding Style & Naming Conventions
 
@@ -23,7 +25,7 @@ Use Python 3 style with 4-space indentation, type hints, and standard-library mo
 
 ## Testing Guidelines
 
-No automated test suite is currently committed. For code changes, at minimum run `python3 -m py_compile scripts/docker-backup.py`. When Docker behavior changes, verify against disposable containers and volumes before using production data. Exercise both `list` and `backup --non-interactive` paths, and inspect the generated `manifest.json` for expected containers, mounts, compose files, and image archives.
+For code changes, run `python3 -m py_compile scripts/docker-backup.py docker_backup/*.py` and `python3 -m unittest -v`. When Docker behavior changes, verify against disposable containers and volumes before using production data. Exercise `list`, `backup --non-interactive`, and restore conflict paths, and inspect the generated `manifest.json` and `restore-report.json` for expected containers, mounts, compose files, image archives, and safety reports.
 
 ## Commit & Pull Request Guidelines
 

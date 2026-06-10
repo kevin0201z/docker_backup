@@ -98,6 +98,7 @@ def reconstruct_run_command(container: Container) -> str:
     host = container.raw.get("HostConfig", {})
     network = container.raw.get("NetworkSettings", {})
     cmd = ["docker", "run", "-d", "--name", container.name]
+    entrypoint_args: list[str] = []
 
     if host.get("RestartPolicy", {}).get("Name"):
         restart = host["RestartPolicy"]["Name"]
@@ -147,9 +148,14 @@ def reconstruct_run_command(container: Container) -> str:
 
     entrypoint = cfg.get("Entrypoint")
     if entrypoint:
-        cmd.extend(["--entrypoint", " ".join(entrypoint) if isinstance(entrypoint, list) else entrypoint])
+        if isinstance(entrypoint, list):
+            cmd.extend(["--entrypoint", entrypoint[0]])
+            entrypoint_args = [str(part) for part in entrypoint[1:]]
+        else:
+            cmd.extend(["--entrypoint", entrypoint])
 
     cmd.append(container.image)
+    cmd.extend(entrypoint_args)
     configured_cmd = cfg.get("Cmd")
     if configured_cmd:
         cmd.extend(configured_cmd if isinstance(configured_cmd, list) else [configured_cmd])
@@ -232,10 +238,33 @@ def restart_containers(containers: list[Container], log: Callable[[str], None] =
             log(f"启动容器 {container.name} 失败：{exc}")
 
 
-def copy_if_exists(src: Path, dst_dir: Path) -> Path | None:
+def copy_relative_path(src: Path, base_dir: Path | None = None) -> Path:
+    try:
+        resolved = src.resolve()
+    except OSError:
+        resolved = src.absolute()
+
+    rel: Path
+    if base_dir is not None:
+        try:
+            rel = resolved.relative_to(base_dir.resolve())
+        except (OSError, ValueError):
+            rel = Path(*resolved.parts[1:]) if resolved.is_absolute() else Path(src.name)
+    elif resolved.is_absolute():
+        rel = Path(*resolved.parts[1:])
+    else:
+        rel = Path(src.name)
+
+    if not rel.parts or any(part in {"", ".", ".."} for part in rel.parts):
+        return Path(src.name)
+    return rel
+
+
+def copy_if_exists(src: Path, dst_dir: Path, base_dir: Path | None = None) -> Path | None:
     if not src.exists() or not src.is_file():
         return None
-    dst = dst_dir / src.name
+    dst = dst_dir / copy_relative_path(src, base_dir)
+    dst.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(src, dst)
     return dst
 
@@ -271,6 +300,29 @@ def make_tar_from_path(src: Path, out_file: Path) -> None:
         tar.add(src, arcname=src.name)
 
 
+def validate_tar_member(destination: Path, member: tarfile.TarInfo) -> None:
+    target = (destination / member.name).resolve(strict=False)
+    try:
+        target.relative_to(destination)
+    except ValueError as exc:
+        raise RuntimeError(f"unsafe tar entry: {member.name}") from exc
+
+    if member.isdev() or member.islnk():
+        raise RuntimeError(f"unsafe tar entry type: {member.name}")
+    if member.issym():
+        link_target = Path(member.linkname)
+        if link_target.is_absolute():
+            resolved_link = link_target.resolve(strict=False)
+        else:
+            resolved_link = (target.parent / link_target).resolve(strict=False)
+        try:
+            resolved_link.relative_to(destination)
+        except ValueError as exc:
+            raise RuntimeError(f"unsafe tar link target: {member.name}") from exc
+    elif not (member.isdir() or member.isfile()):
+        raise RuntimeError(f"unsupported tar entry type: {member.name}")
+
+
 def safe_extract_tar(archive: Path, destination: Path) -> None:
     """Extract tar while guarding against path traversal via symlinks.
 
@@ -286,17 +338,15 @@ def safe_extract_tar(archive: Path, destination: Path) -> None:
     """
     destination = destination.resolve()
     with tarfile.open(archive, "r:*") as tar:
-        if sys.version_info >= (3, 12):
-            tar.extractall(destination, filter="data")
-            return
-
         members = tar.getmembers()
         for member in members:
-            target = (destination / member.name).resolve()
-            try:
-                target.relative_to(destination)
-            except ValueError as exc:
-                raise RuntimeError(f"unsafe tar entry: {member.name}") from exc
+            validate_tar_member(destination, member)
+
+        if sys.version_info >= (3, 12):
+            tar.extractall(destination, members=members, filter="data")
+            return
+
+        for member in members:
             tar.extract(member, destination, set_attrs=False)
         # Defer directory attribute-setting so that restrictive perms
         # (e.g. chmod 0555) don't block files inside that directory.

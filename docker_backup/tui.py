@@ -13,7 +13,7 @@ from typing import Iterable
 from .backup import perform_backup
 from .docker_ops import consistency_scope, load_containers, require_docker
 from .models import BackupOptions, Container
-from .restore import load_manifest, restore_backup, scan_backup_dirs
+from .restore import load_manifest, restore_backup, restore_conflicts, scan_backup_dirs
 from .utils import available_space, database_hints, estimate_bind_size, human_size
 
 
@@ -396,6 +396,12 @@ class DockerBackupTUI:
         if not choice:
             return
         backup_dir, manifest = choice
+        try:
+            require_docker()
+            conflicts = restore_conflicts(manifest)
+        except SystemExit as exc:
+            self.message("Docker 不可用", [str(exc)])
+            return
         lines = self.backup_summary_lines(backup_dir, manifest)
         lines.extend(
             [
@@ -405,11 +411,17 @@ class DockerBackupTUI:
                 "同名容器不会自动替换；完成后会展示/记录重建命令。",
             ]
         )
+        if conflicts:
+            lines.extend(["", "检测到运行中的容器正在使用目标数据，还原已中止："])
+            for target, containers in conflicts.items():
+                lines.append(f"- {target}：{', '.join(containers)}")
+            lines.extend(["", "请先停止这些容器，或在命令行中使用 restore --force 明确覆盖。"])
+            self.show_lines("还原冲突", lines)
+            return
         if not self.confirm("确认还原", lines, default=False):
             return
         self.logs = []
         try:
-            require_docker()
             report_path = restore_backup(backup_dir, self.log)
             commands = [c.get("run_command") for c in manifest.get("containers", []) if c.get("run_command")]
             done_lines = [f"还原完成，报告文件：{report_path}"]
