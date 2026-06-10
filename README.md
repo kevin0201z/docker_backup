@@ -27,6 +27,27 @@ python3 scripts/docker-backup.py list
 python3 scripts/docker-backup.py backup
 ```
 
+打开中文 TUI：
+
+```bash
+python3 scripts/docker-backup.py tui
+```
+
+TUI 主菜单包含：
+
+- `备份容器`
+- `还原备份`
+- `查看备份`
+- `删除备份`
+- `退出`
+
+常用快捷键：
+
+- `↑/↓` 移动
+- `空格` 选择或切换选项
+- `回车` 确认
+- `q` 返回或退出
+
 指定输出目录：
 
 ```bash
@@ -91,6 +112,36 @@ backups/docker-backup-YYYYmmdd-HHMMSS/
 如果备份时选择了停止容器，`manifest.json` 也会记录本次被停止过的容器名称、共享挂载关系、被跳过的 bind mount，以及单项备份失败记录。
 
 如果备份过程中发生整体异常，工具会写出 `manifest.partial.json`，方便判断哪些步骤已经完成。
+
+## TUI 还原
+
+TUI 会从 `backups/docker-backup-*` 中读取 `manifest.json` 并展示中文详情。
+
+确认还原后，工具会直接执行：
+
+- `docker load` 恢复镜像归档
+- 恢复命名 Docker volume
+- 恢复 bind mount 目录
+
+为了避免误覆盖，已有 volume 或 bind mount 目标会先备份到：
+
+```text
+backups/docker-backup-YYYYmmdd-HHMMSS/restore-safety/<timestamp>/
+```
+
+还原过程会写出：
+
+```text
+backups/docker-backup-YYYYmmdd-HHMMSS/restore-report.json
+```
+
+同名容器不会自动停止、删除或替换。还原完成后，TUI 会展示 `manifest.json` 中记录的 `docker run` 命令或 compose 恢复提示，供你确认后手动执行。
+
+## TUI 删除备份
+
+`删除备份` 会从 `backups/docker-backup-*` 中按从旧到新的顺序选择一个备份目录，展示摘要并要求二次确认。
+
+删除操作只会删除该备份目录本身，包括其中的 `volumes/`、`binds/`、`images/`、`restore-safety/` 和报告文件；不会删除 Docker 容器、镜像、数据卷或宿主机业务目录。
 
 ## 恢复思路
 
