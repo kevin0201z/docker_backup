@@ -16,6 +16,7 @@ This repository contains a zero-dependency Docker backup helper.
 - `python3 scripts/docker-backup.py list` lists Docker containers and detected mounts. Requires access to a running Docker daemon.
 - `python3 scripts/docker-backup.py backup` starts an interactive backup.
 - `python3 scripts/docker-backup.py backup --non-interactive --containers all --include-volumes --include-binds` runs a full data backup without prompts.
+- `python3 scripts/build-release.py` builds the copyable single-file `dist/docker-backup.pyz` release and `dist/SHA256SUMS`.
 - `python3 -m py_compile scripts/docker-backup.py docker_backup/*.py` performs a quick syntax check without requiring Docker.
 - `python3 -m unittest -v` runs the regression suite.
 

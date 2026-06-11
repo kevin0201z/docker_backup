@@ -1,5 +1,6 @@
 # Backup outputs
 backups/
+dist/
 *.tar
 *.tar.gz
 

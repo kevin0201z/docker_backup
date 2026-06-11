@@ -15,6 +15,35 @@
 
 ## 使用
 
+生成单文件发布版：
+
+```bash
+python3 scripts/build-release.py
+```
+
+会生成：
+
+```text
+dist/docker-backup.pyz
+dist/SHA256SUMS
+```
+
+把 `dist/docker-backup.pyz` 复制到其他机器后即可执行：
+
+```bash
+chmod +x docker-backup.pyz
+./docker-backup.pyz --help
+./docker-backup.pyz list
+```
+
+也可以不用执行权限，直接用 Python 运行：
+
+```bash
+python3 docker-backup.pyz --help
+```
+
+目标机器需要有 Python 3、Docker CLI，并且当前用户能访问 Docker daemon。发布包仍是零第三方依赖。
+
 列出当前容器和挂载：
 
 ```bash
