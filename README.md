@@ -42,7 +42,7 @@ chmod +x docker-backup.pyz
 python3 docker-backup.pyz --help
 ```
 
-目标机器需要有 Python 3、Docker CLI，并且当前用户能访问 Docker daemon。发布包仍是零第三方依赖。
+目标机器需要有 Python 3.9+、Docker CLI，并且当前用户能访问 Docker daemon。发布包仍是零第三方依赖。建议在 Linux/Unix 或 WSL 中运行；中文 TUI 使用标准库 `curses`，Windows 原生 Python 通常不自带该模块。
 
 列出当前容器和挂载：
 
